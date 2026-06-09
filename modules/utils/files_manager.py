@@ -1,7 +1,6 @@
 import os
 import fnmatch
 from ruamel.yaml import YAML
-from gradio.utils import NamedString
 
 from modules.utils.paths import DEFAULT_PARAMETERS_CONFIG_PATH
 
@@ -16,7 +15,8 @@ FALLBACK_ENCODINGS = ['cp949', 'euc-kr']
 
 
 def load_yaml(path: str = DEFAULT_PARAMETERS_CONFIG_PATH, use_fallback: bool = True):
-    yaml = YAML(typ="safe")
+    # 使用 "rt" (Round-Trip) 模式以真正支持 preserve_quotes
+    yaml = YAML(typ="rt")
     yaml.preserve_quotes = True
     try:
         with open(path, 'r', encoding='utf-8') as file:
@@ -47,7 +47,8 @@ def load_yaml(path: str = DEFAULT_PARAMETERS_CONFIG_PATH, use_fallback: bool = T
 
 
 def save_yaml(data: dict, path: str = DEFAULT_PARAMETERS_CONFIG_PATH):
-    yaml = YAML(typ="safe")
+    # 使用 "rt" 模式以保证写入时不会破坏原文件的排版和引号格式
+    yaml = YAML(typ="rt")
     yaml.map_indent = 2
     yaml.sequence_indent = 4
     yaml.sequence_dash_offset = 2
@@ -83,13 +84,10 @@ def get_media_files(folder_path, include_sub_directory=False):
 
 
 def format_gradio_files(files: list):
+    # Gradio 5.x 已经原生支持文件路径列表，NamedString 已被弃用并移除
     if not files:
         return files
-
-    gradio_files = []
-    for file in files:
-        gradio_files.append(NamedString(file))
-    return gradio_files
+    return files
 
 
 def is_video(file_path):
