@@ -1,10 +1,8 @@
 # Adapted from https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/vad.py
 
-from faster_whisper.vad import VadOptions, get_vad_model
+from faster_whisper.vad import VadOptions, get_speech_timestamps
 import numpy as np
 from typing import BinaryIO, Union, List, Optional, Tuple
-import warnings
-import bisect
 import faster_whisper
 from faster_whisper.transcribe import SpeechTimestampsMap
 import gradio as gr
@@ -15,8 +13,7 @@ from modules.whisper.data_classes import *
 class SileroVAD:
     def __init__(self):
         self.sampling_rate = 16000
-        self.window_size_samples = 512
-        self.model = None
+        # 移除 self.model = None，交由官方 API 自动在底层管理模型生命周期
 
     def run(self,
             audio: Union[str, BinaryIO, np.ndarray],
@@ -48,169 +45,21 @@ class SileroVAD:
         if not isinstance(audio, np.ndarray):
             audio = faster_whisper.decode_audio(audio, sampling_rate=sampling_rate)
 
-        duration = audio.shape[0] / sampling_rate
-        duration_after_vad = duration
-
         if vad_parameters is None:
             vad_parameters = VadOptions()
         elif isinstance(vad_parameters, dict):
             vad_parameters = VadOptions(**vad_parameters)
-        speech_chunks = self.get_speech_timestamps(
+            
+        # [核心优化区]：直接调用 faster-whisper 1.2.1 原生的 get_speech_timestamps
+        # 彻底解决旧版手写逻辑导致的 1D array 报错，且完美兼容 V5/V6 模型
+        speech_chunks = get_speech_timestamps(
             audio=audio,
             vad_options=vad_parameters,
-            progress=progress
         )
 
         audio = self.collect_chunks(audio, speech_chunks)
-        duration_after_vad = audio.shape[0] / sampling_rate
 
         return audio, speech_chunks
-
-    def get_speech_timestamps(
-        self,
-        audio: np.ndarray,
-        vad_options: Optional[VadOptions] = None,
-        progress: gr.Progress = gr.Progress(),
-        **kwargs,
-    ) -> List[dict]:
-        """This method is used for splitting long audios into speech chunks using silero VAD.
-
-        Args:
-          audio: One dimensional float array.
-          vad_options: Options for VAD processing.
-          kwargs: VAD options passed as keyword arguments for backward compatibility.
-          progress: Gradio progress to indicate progress.
-
-        Returns:
-          List of dicts containing begin and end samples of each speech chunk.
-        """
-
-        if self.model is None:
-            self.update_model()
-
-        if vad_options is None:
-            vad_options = VadOptions(**kwargs)
-
-        threshold = vad_options.threshold
-        neg_threshold = vad_options.neg_threshold
-        min_speech_duration_ms = vad_options.min_speech_duration_ms
-        max_speech_duration_s = vad_options.max_speech_duration_s
-        min_silence_duration_ms = vad_options.min_silence_duration_ms
-        window_size_samples = self.window_size_samples
-        speech_pad_ms = vad_options.speech_pad_ms
-        min_speech_samples = self.sampling_rate * min_speech_duration_ms / 1000
-        speech_pad_samples = self.sampling_rate * speech_pad_ms / 1000
-        max_speech_samples = (
-                self.sampling_rate * max_speech_duration_s
-                - window_size_samples
-                - 2 * speech_pad_samples
-        )
-        min_silence_samples = self.sampling_rate * min_silence_duration_ms / 1000
-        min_silence_samples_at_max_speech = self.sampling_rate * 98 / 1000
-
-        audio_length_samples = len(audio)
-
-        padded_audio = np.pad(
-            audio, (0, window_size_samples - audio.shape[0] % window_size_samples)
-        )
-        speech_probs = self.model(padded_audio.reshape(1, -1)).squeeze(0)
-
-        triggered = False
-        speeches = []
-        current_speech = {}
-        if neg_threshold is None:
-            neg_threshold = max(threshold - 0.15, 0.01)
-
-        # to save potential segment end (and tolerate some silence)
-        temp_end = 0
-        # to save potential segment limits in case of maximum segment size reached
-        prev_end = next_start = 0
-
-        for i, speech_prob in enumerate(speech_probs):
-            if (speech_prob >= threshold) and temp_end:
-                temp_end = 0
-                if next_start < prev_end:
-                    next_start = window_size_samples * i
-
-            if (speech_prob >= threshold) and not triggered:
-                triggered = True
-                current_speech["start"] = window_size_samples * i
-                continue
-
-            if (
-                    triggered
-                    and (window_size_samples * i) - current_speech["start"] > max_speech_samples
-            ):
-                if prev_end:
-                    current_speech["end"] = prev_end
-                    speeches.append(current_speech)
-                    current_speech = {}
-                    # previously reached silence (< neg_thres) and is still not speech (< thres)
-                    if next_start < prev_end:
-                        triggered = False
-                    else:
-                        current_speech["start"] = next_start
-                    prev_end = next_start = temp_end = 0
-                else:
-                    current_speech["end"] = window_size_samples * i
-                    speeches.append(current_speech)
-                    current_speech = {}
-                    prev_end = next_start = temp_end = 0
-                    triggered = False
-                    continue
-
-            if (speech_prob < neg_threshold) and triggered:
-                if not temp_end:
-                    temp_end = window_size_samples * i
-                # condition to avoid cutting in very short silence
-                if (window_size_samples * i) - temp_end > min_silence_samples_at_max_speech:
-                    prev_end = temp_end
-                if (window_size_samples * i) - temp_end < min_silence_samples:
-                    continue
-                else:
-                    current_speech["end"] = temp_end
-                    if (
-                            current_speech["end"] - current_speech["start"]
-                    ) > min_speech_samples:
-                        speeches.append(current_speech)
-                    current_speech = {}
-                    prev_end = next_start = temp_end = 0
-                    triggered = False
-                    continue
-
-        if (
-                current_speech
-                and (audio_length_samples - current_speech["start"]) > min_speech_samples
-        ):
-            current_speech["end"] = audio_length_samples
-            speeches.append(current_speech)
-
-        for i, speech in enumerate(speeches):
-            if i == 0:
-                speech["start"] = int(max(0, speech["start"] - speech_pad_samples))
-            if i != len(speeches) - 1:
-                silence_duration = speeches[i + 1]["start"] - speech["end"]
-                if silence_duration < 2 * speech_pad_samples:
-                    speech["end"] += int(silence_duration // 2)
-                    speeches[i + 1]["start"] = int(
-                        max(0, speeches[i + 1]["start"] - silence_duration // 2)
-                    )
-                else:
-                    speech["end"] = int(
-                        min(audio_length_samples, speech["end"] + speech_pad_samples)
-                    )
-                    speeches[i + 1]["start"] = int(
-                        max(0, speeches[i + 1]["start"] - speech_pad_samples)
-                    )
-            else:
-                speech["end"] = int(
-                    min(audio_length_samples, speech["end"] + speech_pad_samples)
-                )
-
-        return speeches
-
-    def update_model(self):
-        self.model = get_vad_model()
 
     @staticmethod
     def collect_chunks(audio: np.ndarray, chunks: List[dict]) -> np.ndarray:
@@ -274,4 +123,3 @@ class SileroVAD:
                 segment.end = ts_map.get_original_time(segment.end)
 
         return segments
-
