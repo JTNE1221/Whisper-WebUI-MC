@@ -190,10 +190,10 @@ class MusicSeparator:
                     }
             # ==========================================
             
-            # 使用官方接口初始化模型，强制指定 model_path 绕过内部下载路径逻辑
+            # 使用官方接口初始化模型
             self.model = MDX(
                 name=clean_model_name,
-                model_path=model_path, 
+                model_dir=self.model_dir,    # <--- 改成传目录，它会自己根据名字去找文件
                 other_metadata=combined_metadata,
                 device=self.device,
                 logger=logger
