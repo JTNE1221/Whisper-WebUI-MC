@@ -4,6 +4,30 @@ import gradio as gr
 from gradio_i18n import Translate, gettext as _
 import yaml
 
+# ======== 修复 1：huggingface_hub 参数名兼容性补丁 ========
+import huggingface_hub
+_original_hf_hub_download = huggingface_hub.hf_hub_download
+
+def _patched_hf_hub_download(*args, **kwargs):
+    if 'use_auth_token' in kwargs:
+        kwargs['token'] = kwargs.pop('use_auth_token')
+    return _original_hf_hub_download(*args, **kwargs)
+
+huggingface_hub.hf_hub_download = _patched_hf_hub_download
+# ============================================================
+
+# ======== 修复 2：PyTorch 2.6+ weights_only 严格模式补丁 ========
+import torch
+_original_torch_load = torch.load
+
+def _patched_torch_load(*args, **kwargs):
+    # 霸道模式：无论底层库是否主动要求 weights_only=True，统统强行覆写为 False
+    kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = _patched_torch_load
+# ============================================================
+
 from modules.utils.paths import (FASTER_WHISPER_MODELS_DIR, DIARIZATION_MODELS_DIR, OUTPUT_DIR, WHISPER_MODELS_DIR,
                                  INSANELY_FAST_WHISPER_MODELS_DIR, NLLB_MODELS_DIR, DEFAULT_PARAMETERS_CONFIG_PATH,
                                  UVR_MODELS_DIR, I18N_YAML_PATH)
