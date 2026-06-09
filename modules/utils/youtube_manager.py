@@ -23,6 +23,8 @@ def get_ytaudio(ytdata: YouTube):
         subprocess.run([
             'ffmpeg', '-y',
             '-i', audio_path,
+            '-ac', '1',          # 强制转换为单声道 (解决 VAD 和多声道冲突)
+            '-ar', '16000',      # 强制重采样为 16kHz (适应 Whisper 原生输入标准)
             temp_audio_path
         ], check=True)
 
