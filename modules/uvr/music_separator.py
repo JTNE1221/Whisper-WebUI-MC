@@ -74,7 +74,7 @@ class MusicSeparator:
         
         for file in model_dir.iterdir():
             if file.suffix.lower() in suffixes and file.is_file():
-                model_files.append(file.stem) # 只添加文件名
+                model_files.append(file.name) # 只添加文件名
         
         if model_files:
             logger.info(f"Successfully scanned {len(model_files)} models: {model_files}")
