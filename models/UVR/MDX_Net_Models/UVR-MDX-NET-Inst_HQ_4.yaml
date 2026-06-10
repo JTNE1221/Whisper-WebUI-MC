@@ -1,0 +1,9 @@
+dim_f: 3072
+dim_t: 8
+n_fft: 7680
+hop: 1024
+segment_size: 256
+overlap: 0.25
+split: true
+compensate: 1.035
+primary_stem: Instrumental

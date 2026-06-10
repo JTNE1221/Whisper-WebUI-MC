@@ -1,0 +1,9 @@
+dim_f: 3072
+dim_t: 256
+n_fft: 6144
+hop: 1024
+segment_size: 256
+overlap: 0.25
+split: true
+compensate: 1.035
+primary_stem: Vocals
