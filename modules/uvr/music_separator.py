@@ -86,8 +86,8 @@ class MusicSeparator:
     
     def update_model(self, model_name: str = None, device: Optional[str] = None, segment_size: int = 256):
         """
-        Update model with dynamic config loading (Sidecar YAML/JSON) and 
-        memory injection to bypass uvr library constraints.
+        Update model with non-intrusive dynamic config loading.
+        Native models run natively. Unknown models get injected via hash dictionary.
         """
         import os
         import json
@@ -122,46 +122,28 @@ class MusicSeparator:
                 clean_model_name = model_name[:-len(ext)]
                 break
         
-        # 3. 动态读取本地配套配置文件 (Sidecar Config)
-        native_config = {}
+        # 3. 尝试读取 Sidecar 配置文件 (用于未知模型)
+        custom_config = {}
         yaml_path = os.path.join(self.model_dir, f"{clean_model_name}.yaml")
         json_path = os.path.join(self.model_dir, f"{clean_model_name}.json")
         
         if os.path.exists(yaml_path):
-            logger.info(f"Found sidecar YAML config for {clean_model_name}")
             try:
-                native_config = load_yaml(yaml_path) 
-            except Exception as e:
-                logger.warning(f"Failed to parse YAML config: {e}")
+                custom_config = load_yaml(yaml_path) 
+            except Exception: pass
         elif os.path.exists(json_path):
-            logger.info(f"Found sidecar JSON config for {clean_model_name}")
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
-                    native_config = json.load(f)
-            except Exception as e:
-                logger.warning(f"Failed to parse JSON config: {e}")
-        else:
-            logger.info(f"No sidecar config found for {clean_model_name}. Using fallback generic parameters.")
-            # 兜底配置：绝大多数 MDX 模型的通用安全参数
-            native_config = {
-                "dim_f": 3072, "dim_t": 256, "n_fft": 6144, 
-                "hop": 1024, "overlap": 0.25, "compensate": 1.035,
-                "primary_stem": "Instrumental"
-            }
+                    custom_config = json.load(f)
+            except Exception: pass
 
-        # 合并最终配置
-        combined_metadata = {**native_config, **self.model_config}
-
-        # 4. 加载模型与内存注入破解
+        # 4. 加载模型与无损内存注入
         try:
             if self.model is not None:
                 self.offload()
                 
             logger.info(f"Loading UVR model: {model_name} on {self.device}")
             
-            # ==========================================
-            # 终极魔法：破解 uvr 库的双重限制
-            # ==========================================
             import uvr.models
             from uvr.models_dir.mdx import mdx_interface as mdx_api
             
@@ -170,31 +152,32 @@ class MusicSeparator:
                 if 'mdx' not in uvr.models.models_json:
                     uvr.models.models_json['mdx'] = {}
                 if clean_model_name not in uvr.models.models_json['mdx']:
-                    logger.info(f"Injecting name '{clean_model_name}' into internal models_json registry.")
                     uvr.models.models_json['mdx'][clean_model_name] = {"model_path": ""}
                     
-            # 破解关卡 2：强行注册 MD5 哈希参数 (解决 model_data.json KeyError)
+            # 破解关卡 2：仅对“未知哈希”进行底层参数注入，绝不污染官方原生模型
             if hasattr(uvr.models.MDX, 'models_data'):
-                # 调用官方库的方法计算本地 onnx 的哈希值
                 model_hash = mdx_api.get_model_hash_from_path(model_path)
                 
-                # 如果这个哈希不在它的字典里，我们将 YAML/兜底 的参数翻译成官方格式并注入内存
                 if model_hash not in uvr.models.MDX.models_data:
-                    logger.info(f"Injecting MD5 {model_hash} for {clean_model_name} into memory.")
+                    logger.info(f"Unknown MD5 {model_hash}. Injecting config into memory.")
                     uvr.models.MDX.models_data[model_hash] = {
-                        "compensate": combined_metadata.get("compensate", 1.035),
-                        "mdx_dim_f_set": combined_metadata.get("dim_f", 3072),
-                        "mdx_dim_t_set": combined_metadata.get("dim_t", 256),
-                        "mdx_n_fft_scale_set": combined_metadata.get("n_fft", 6144),
-                        "primary_stem": combined_metadata.get("primary_stem", "Instrumental")
+                        "compensate": custom_config.get("compensate", 1.035),
+                        "mdx_dim_f_set": custom_config.get("dim_f", 3072),
+                        "mdx_dim_t_set": custom_config.get("dim_t", 256),
+                        "mdx_n_fft_scale_set": custom_config.get("n_fft", 6144),
+                        "primary_stem": custom_config.get("primary_stem", "Instrumental")
                     }
-            # ==========================================
+            
+            # 只传递运行时的切片参数，坚决不传递 dim_t 等网络结构参数
+            runtime_metadata = {**self.model_config}
+            if "segment_size" in custom_config:
+                runtime_metadata["segment_size"] = custom_config["segment_size"]
             
             # 使用官方接口初始化模型
             self.model = MDX(
                 name=clean_model_name,
-                model_dir=self.model_dir,    # <--- 改成传目录，它会自己根据名字去找文件
-                other_metadata=combined_metadata,
+                model_dir=self.model_dir, 
+                other_metadata=runtime_metadata,
                 device=self.device,
                 logger=logger
             )
